@@ -1,0 +1,32 @@
+---
+# defaults file for zabbix_server
+# Defaults variables for postgresql
+zabbix_server_postgresql_version: 12
+zabbix_server_postgresql_dependencies:
+  - postgresql{{ zabbix_server_postgresql_version }}
+  - postgresql{{ zabbix_server_postgresql_version }}-server
+  - timescaledb-2-postgresql-{{ zabbix_server_postgresql_version }}
+zabbix_server_postgres_db_user: postgres
+zabbix_server_db_name: zabbix
+zabbix_server_db_user: zabbix
+zabbix_server_db_password: zabbix
+zabbix_server_db_host: localhost
+zabbix_server_postgres_max_connection: 100
+
+# Defaults variables for Zabbix-server
+zabbix_server_version: 5.0
+zabbix_server_templates_path: "{{ role_path }}/templates"
+zabbix_server_hostname: "{{ ansible_fqdn }}"
+zabbix_server_sourceip: "{{ ansible_default_ipv4.address }}"
+zabbix_server_startpollers: 15
+zabbix_server_startpollersunreachable: 20
+zabbix_server_startpingers: 10
+zabbix_server_startdiscoverers: 5
+zabbix_server_housekeepingfrequency: 1
+zabbix_server_maxhousekeeperdelete: 5000
+zabbix_server_cachesize: 256M
+zabbix_server_valuecachesize: 64M
+zabbix_server_timeout: 15
+zabbix_server_logslowqueries: 3000
+zabbix_server_statsallowedip: 127.0.0.1
+zabbix_server_date_timezone: Asia/Yekaterinburg

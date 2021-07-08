@@ -1,0 +1,202 @@
+---
+# tasks file for zabbix_server
+- name: zabbix_server | Adding a PostgreSQL repository for RedHat
+  yum:
+    name: "https://download.postgresql.org/pub/repos/yum/reporpms/EL-{{ ansible_distribution_major_version }}-x86_64/pgdg-redhat-repo-latest.noarch.rpm"
+    state: present
+
+- name: zabbix_server | Adding a Timescaledb repository for RedHat
+  yum_repository:
+    name: timescale_timescaledb
+    description: timescale_timescaledb
+    baseurl: "https://packagecloud.io/timescale/timescaledb/el/{{ ansible_distribution_major_version }}/$basearch"
+    repo_gpgcheck: yes
+    gpgcheck: no
+    enabled: yes
+    gpgkey: https://packagecloud.io/timescale/timescaledb/gpgkey
+    sslverify: yes
+    sslcacert: /etc/pki/tls/certs/ca-bundle.crt
+
+- name: zabbix_server | Install packages PostgreSQL and Timescaledb
+  yum:
+    name: "{{ item }}"
+    state: present
+    update_cache: yes
+  loop: "{{ zabbix_server_postgresql_dependencies }}"
+  register: zabbix_server_postgresql_install
+
+- name: zabbix_server | Initialization PostgreSQL
+  command: "/usr/pgsql-{{ zabbix_server_postgresql_version }}/bin/postgresql-{{ zabbix_server_postgresql_version }}-setup initdb"
+  when: zabbix_server_postgresql_install.changed
+
+- name: zabbix_server | Configure postgresql.conf with Timescaledb
+  command: "timescaledb-tune --pg-config=/usr/pgsql-{{ zabbix_server_postgresql_version }}/bin/pg_config --quiet --yes >> /var/lib/pgsql/{{ zabbix_server_postgresql_version }}/data/postgresql.conf"
+  when: zabbix_server_postgresql_install.changed
+
+- name: zabbix_server | Running PostgreSQL service
+  service:
+    name: "postgresql-{{ zabbix_server_postgresql_version }}"
+    state: started
+    enabled: yes
+
+- name: zabbix_server | Activate RedHat Software Collections
+  yum:
+    name:
+      - python-psycopg2
+      - centos-release-scl
+    state: present
+
+- name: zabbix_server | Adding a Zabbix repository for RedHat
+  yum:
+    name: "https://repo.zabbix.com/zabbix/{{ zabbix_server_version }}/rhel/{{ ansible_distribution_major_version }}/x86_64/zabbix-release-{{ zabbix_server_version }}-1.el{{ ansible_distribution_major_version }}.noarch.rpm"
+    state: present
+
+- name: zabbix_server | Activate the repository zabbix-frontend
+  yum_repository:
+    name: zabbix-frontend
+    description: "Zabbix Official Repository frontend - $basearch"
+    baseurl: "http://repo.zabbix.com/zabbix/{{ zabbix_server_version }}/rhel/{{ ansible_distribution_major_version }}/$basearch/frontend"
+    gpgkey: file:///etc/pki/rpm-gpg/RPM-GPG-KEY-ZABBIX
+    gpgcheck: no
+    enabled: yes
+    file: zabbix
+
+- name: zabbix_server | Install Zabbix-server packages
+  yum:
+    name:
+      - zabbix-server-pgsql
+      - zabbix-web-deps-scl
+      - zabbix-web-pgsql-scl
+      - zabbix-nginx-conf-scl
+      - zabbix-agent
+    state: present
+
+- name: zabbix_server | Create user {{ zabbix_server_db_user }} to postgresql database
+  become: true
+  become_user: "{{ zabbix_server_postgres_db_user }}"
+  postgresql_user:
+    name: "{{ zabbix_server_db_user }}"
+    password: "{{ zabbix_server_db_password }}"
+
+- name: zabbix_server | Create a new database with name {{ zabbix_server_db_name }}
+  become: true
+  become_user: "{{ zabbix_server_postgres_db_user }}"
+  postgresql_db:
+    name: "{{ zabbix_server_db_name }}"
+    owner: "{{ zabbix_server_db_user }}"
+    state: present
+    encoding: UTF-8
+    template: template0
+
+- name: zabbix_server | Importing schema and data with file Zabbix
+  shell: 'zcat /usr/share/doc/zabbix-server-pgsql*/create.sql.gz | sudo -u {{ zabbix_server_db_user }} psql {{ zabbix_server_db_name }}'
+  when: zabbix_server_postgresql_install.changed
+
+- name: zabbix_server | Add timescaledb extension to postgresql database
+  become: true
+  become_user: "{{ zabbix_server_postgres_db_user }}"
+  command: 'psql -d {{ zabbix_server_db_name }} -c "CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;"'
+  when: zabbix_server_postgresql_install.changed
+
+- name: zabbix_server | Importing data file Timescaledb
+  shell: 'zcat /usr/share/doc/zabbix-server-pgsql*/timescaledb.sql.gz | sudo -u {{ zabbix_server_db_user }} psql {{ zabbix_server_db_name }}'
+  when: zabbix_server_postgresql_install.changed
+
+- name: zabbix_server | Copy config file pg_hba.conf
+  template:
+    src: "{{ zabbix_server_templates_path }}/pg_hba.conf.j2"
+    dest: "/var/lib/pgsql/{{ zabbix_server_postgresql_version }}/data/pg_hba.conf"
+    owner: "{{ zabbix_server_postgres_db_user }}"
+    group: "{{ zabbix_server_postgres_db_user }}"
+    mode: '0600'
+    backup: yes
+  notify: restart service postgresql
+
+- name: zabbix_server | Edit file zabbix.conf.php
+  template:
+    src: "{{ zabbix_server_templates_path }}/zabbix.conf.php.j2"
+    dest: /etc/zabbix/web/zabbix.conf.php
+    owner: apache
+    group: apache
+    mode: '0644'
+    backup: yes
+  notify: restart service zabbix-server
+
+- name: zabbix_server | Edit file zabbix_server.conf
+  template:
+    src: "{{ zabbix_server_templates_path }}/zabbix_server.conf.j2"
+    dest: /etc/zabbix/zabbix_server.conf
+    owner: root
+    group: zabbix
+    mode: '0640'
+    backup: yes
+  notify: restart service zabbix-server
+
+- name: zabbix_server | Edit vhost zabbix in nginx
+  template:
+    src: "{{ zabbix_server_templates_path }}/nginx_zabbix.conf.j2"
+    dest: /etc/opt/rh/rh-nginx116/nginx/conf.d/zabbix.conf
+    owner: root
+    group: root
+    mode: '0640'
+  notify: restart service nginx
+
+- name: zabbix_server | Edit php-fpm file for zabbix
+  template:
+    src: "{{ zabbix_server_templates_path }}/php_fpm_zabbix.conf.j2"
+    dest: /etc/opt/rh/rh-php72/php-fpm.d/zabbix.conf
+    owner: root
+    group: root
+    mode: '0640'
+  notify: restart service php-fpm
+
+- name: zabbix_server | Configure max_connections in postgresql
+  replace:
+    path: /var/lib/pgsql/12/data/postgresql.conf
+    regexp: "max_connections = .*"
+    replace: "max_connections = {{ zabbix_server_postgres_max_connection }}"
+  notify: restart service postgresql
+
+#######################################################################
+#
+#   - name: zabbix_server | Configure PHP for the web interface Zabbix
+#   replace:
+#     path: "{{ item.path }}"
+#     regexp: "{{ item.src }}"
+#     replace: "{{ item.dest }}"
+#     loop:
+#       - { path: '/etc/opt/rh/rh-php72/php-fpm.d/zabbix.conf', src: '^listen.acl_users = apache', dest: 'listen.acl_users = apache,nginx' }
+#       - { path: '/etc/opt/rh/rh-php72/php-fpm.d/zabbix.conf', src: '^; php_value\[date.timezone\] = Europe/Riga', dest: 'php_value[date.timezone] = Asia/Yekaterinburg' }
+#       - { path: '/etc/opt/rh/rh-nginx116/nginx/conf.d/zabbix.conf', src: '^#        listen          80;', dest: '        listen          80;' }
+#       - { path: '/etc/opt/rh/rh-nginx116/nginx/conf.d/zabbix.conf', src: '^#        server_name     example.com;', dest: '        server_name    {{ ovirt_vm }}.ekaterinburg.fsin.uis {{ ovirt_vm_ip }};' }
+#       - { path: '/etc/opt/rh/rh-nginx116/nginx/nginx.conf', src: '^        listen       \[::\]:80 default_server;', dest: '        # listen       [::]:80 default_server;' }
+#       notify:
+#         - restart service zabbix-server
+#         - restart service nginx
+#         - restart service php-fpm
+#
+# - name: Configure file zabbix_agentd.conf
+#   lineinfile:
+#     path: /etc/zabbix/zabbix_agentd.conf
+#     regexp: "{{ item.src }}"
+#     line: "{{ item.dest }}"
+#   loop:
+#     - { src: '^# ListenIP=0.0.0.0', dest: 'ListenIP={{ ovirt_vm_ip }}' }
+#     - { src: '^Server=127.0.0.1', dest: 'Server={{ ovirt_vm }}.ekaterinburg.fsin.uis' }
+#     - { src: '^ServerActive=127.0.0.1', dest: 'ServerActive={{ ovirt_vm }}.ekaterinburg.fsin.uis' }
+#     - { src: '^Hostname=Zabbix server', dest: 'Hostname={{ ovirt_vm }}.ekaterinburg.fsin.uis' }
+#   notify:
+#     - Restart Zabbix-agent
+#
+# - name: Setting Firewalld for Zabbix server
+#   firewalld:
+#     port: "{{ item }}"
+#     permanent: yes
+#     immediate: yes
+#     state: enabled
+#   loop:
+#     - "80/tcp"
+#     - "443/tcp"
+#     - "10050-10051/tcp"
+#     - "161/udp"
+#     - "162/udp"
