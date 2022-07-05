@@ -11,18 +11,22 @@ None.
 Role Variables
 --------------
 
-Доступные переменные перечислены ниже вместе со значениями по умолчанию (см. `defaults/main.yml`).
-Не забудьте указать свои настройки пользователя базы данных zabbix:
-  - zabbix_server_db_user: zabbix
-  - zabbix_server_db_password: zabbix
+Доступные переменные перечислены ниже вместе со значениями по умолчанию в файле **defaults/main.yml**.
+Указываем логин и пароль пользователя базы данных zabbix:
+```
+- zabbix_server_db_user: zabbix
+- zabbix_server_db_password: zabbix
+```
 
 Dependencies
 ------------
 
-Также необходимо открыть следующие службы и порты в firewall
-  - service: http
-  - port: 10050-10051/tcp
-  - port: 161-162/udp
+Также необходимо открыть следующие службы и порты в firewall:
+```
+- service: http
+- port: 10050-10051/tcp
+- port: 161-162/udp
+```
 
 Example Playbook
 ----------------
@@ -41,4 +45,4 @@ BSD
 Author Information
 ------------------
 
-Chubik Sergey, chubik@ekaterinburg.fsin.uis.
+Chubik Sergey.
